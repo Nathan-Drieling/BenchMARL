@@ -4,6 +4,8 @@
 #  LICENSE file in the root directory of this source tree.
 #
 
+import torch
+ 
 from dataclasses import dataclass, MISSING
 from typing import Dict, Iterable, Tuple, Type
 
@@ -202,9 +204,46 @@ class Maddpg(Algorithm):
             )
 
         if self.state_spec is not None:
+            
+            # ---------------------------------------------------------------------
+            # Original BenchMARL behavior:
+            # The centralized critic receives the complete joint action vector,
+            # created by flattening the actions from every agent into a single tensor.
+            #
+            # Example for Simple Spread with 3 agents and a 5-dimensional
+            # continuous action vector per agent:
+            #
+            # Agent 1: [a1 a2 a3 a4 a5]
+            # Agent 2: [b1 b2 b3 b4 b5]
+            # Agent 3: [c1 c2 c3 c4 c5]
+            #
+            # Original flattened critic input:
+            #
+            # [a1 a2 a3 a4 a5 b1 b2 b3 b4 b5 c1 c2 c3 c4 c5]
+            #
+            # Thesis modification:
+            # Before flattening, action dimension 2 is replaced with 0.0 for every
+            # agent. Only the centralized critic receives this modified action vector.
+            # The actors and environment still receive the original actions.
+            #
+            # Modified flattened critic input:
+            #
+            # [a1 a2 0 a4 a5 b1 b2 0 b4 b5 c1 c2 0 c4 c5]
+            # ---------------------------------------------------------------------
+            
+            hidden_action_dimension = [ 2 , 3 ]  # Example: Hide action dimensions 2 and 3 for the critic
+            
             modules.append(
                 TensorDictModule(
-                    lambda action: action.reshape(*action.shape[:-2], -1),
+                    lambda action: (
+                        action.clone()
+                        .index_fill_(
+                            dim = -1,
+                            index = torch.tensor(hidden_action_dimension, device=action.device),
+                            value = 0.0
+                        )
+                        .reshape(*action.shape[:-2], -1)
+                    ),
                     in_keys=[(group, "action")],
                     out_keys=["global_action"],
                 )
