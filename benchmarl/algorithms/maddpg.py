@@ -231,7 +231,7 @@ class Maddpg(Algorithm):
             # [a1 a2 0 a4 a5 b1 b2 0 b4 b5 c1 c2 0 c4 c5]
             # ---------------------------------------------------------------------
             
-            hidden_action_dimension = [ 2 , 3 ]  # Example: Hide action dimensions 2 and 3 for the critic
+            hidden_action_dimension = 2  # Example: Hide action dimensions 2 and 3 for the critic
             
             modules.append(
                 TensorDictModule(
