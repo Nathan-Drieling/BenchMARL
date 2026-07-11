@@ -204,7 +204,8 @@ class Maddpg(Algorithm):
             )
 
         if self.state_spec is not None:
-            
+            print("DEBUG: state_spec is None?", self.state_spec is None)
+            print("DEBUG: about to build centralized critic action preprocessing")
             # ---------------------------------------------------------------------
             # Original BenchMARL behavior:
             # The centralized critic receives the complete joint action vector,
