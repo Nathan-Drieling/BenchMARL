@@ -230,20 +230,39 @@ class Maddpg(Algorithm):
             #
             # [a1 a2 0 a4 a5 b1 b2 0 b4 b5 c1 c2 0 c4 c5]
             # ---------------------------------------------------------------------
+    
             
-            hidden_action_dimension = 2  # Example: Hide action dimensions 2 and 3 for the critic
+            def hide_action_dimension(action):
+            
+                #changes ONLY the critics input, not the actors or the environment
+                hidden_action_dimension = 2  # Example: Hide action dimensions 2 for the critic
+
+                print("\n==============================")
+                print("Original Action")
+                print(action)
+
+                modified = (
+                    action.clone()
+                    .index_fill_(
+                        dim=-1,
+                        index=torch.tensor([hidden_action_dimension], device=action.device),
+                        value=0.0,
+                    )
+                )
+
+                print("\nModified Action")
+                print(modified)
+
+                print("\nFlattened Critic Input")
+                print(modified.reshape(*action.shape[:-2], -1))
+
+                print("==============================\n")
+
+                return modified.reshape(*action.shape[:-2], -1)
             
             modules.append(
                 TensorDictModule(
-                    lambda action: (
-                        action.clone()
-                        .index_fill_(
-                            dim = -1,
-                            index = torch.tensor(hidden_action_dimension, device=action.device),
-                            value = 0.0
-                        )
-                        .reshape(*action.shape[:-2], -1)
-                    ),
+                    hide_action_dimension,
                     in_keys=[(group, "action")],
                     out_keys=["global_action"],
                 )
