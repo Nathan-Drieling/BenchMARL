@@ -203,9 +203,30 @@ class Maddpg(Algorithm):
                 }
             )
 
+            print(
+                "\n[VERIFY] Building MADDPG centralized critic",
+                flush=True,
+            )
+
+            print(
+                f"[VERIFY] self.state_spec is None: {self.state_spec is None}",
+                flush=True,
+            )
+
+            print(
+                f"[VERIFY] Agent group: {group}",
+                flush=True,
+            )
+
+            print(
+                f"[VERIFY] Number of agents: {n_agents}",
+                flush=True,
+            )
+
         if self.state_spec is not None:
-            print("DEBUG: state_spec is None?", self.state_spec is None)
-            print("DEBUG: about to build centralized critic action preprocessing")
+            
+            print("\n[VERIFY] Using Global-State critic branch", flush=True)
+            
             # ---------------------------------------------------------------------
             # Original BenchMARL behavior:
             # The centralized critic receives the complete joint action vector,
@@ -338,6 +359,9 @@ class Maddpg(Algorithm):
             input_has_agent_dim = False
 
         else:
+            
+            print("\n[VERIFY] Using observation/action critic branch", flush=True)
+            
             critic_input_spec = Composite(
                 {
                     group: self.observation_spec[group]
