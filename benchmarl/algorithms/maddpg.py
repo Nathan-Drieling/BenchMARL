@@ -231,35 +231,94 @@ class Maddpg(Algorithm):
             # [a1 a2 0 a4 a5 b1 b2 0 b4 b5 c1 c2 0 c4 c5]
             # ---------------------------------------------------------------------
     
-            
+            hidden_action_dimension = 2
+            verification_printed = False
+
             def hide_action_dimension(action):
-            
-                #changes ONLY the critics input, not the actors or the environment
-                hidden_action_dimension = 2  # Example: Hide action dimensions 2 for the critic
+                nonlocal verification_printed
 
-                print("\n==============================")
-                print("Original Action")
-                print(action)
+                # Save an untouched copy so we can verify that the original
+                # action tensor is not modified by the critic transformation.
+                original_action = action.detach().clone()
 
-                modified = (
-                    action.clone()
-                    .index_fill_(
-                        dim=-1,
-                        index=torch.tensor([hidden_action_dimension], device=action.device),
-                        value=0.0,
-                    )
+                modified_action = action.clone().index_fill_(
+                    dim=-1,
+                    index=torch.tensor(
+                        [hidden_action_dimension],
+                        device=action.device,
+                        dtype=torch.long,
+                    ),
+                    value=0.0,
                 )
 
-                print("\nModified Action")
-                print(modified)
+                flattened_action = modified_action.reshape(
+                    *action.shape[:-2],
+                    -1,
+                )
 
-                print("\nFlattened Critic Input")
-                print(modified.reshape(*action.shape[:-2], -1))
+                if not verification_printed:
+                    verification_printed = True
 
-                print("==============================\n")
+                    print("\n========== CODE MODIFICATION VERIFICATION ==========", flush=True)
 
-                return modified.reshape(*action.shape[:-2], -1)
-            
+                    print(f"\nOriginal action shape: {tuple(action.shape)}", flush=True)
+                    print(f"Modified action shape: {tuple(modified_action.shape)}", flush=True)
+                    print(
+                        f"Flattened critic input shape: {tuple(flattened_action.shape)}",
+                        flush=True,
+                    )
+
+                    print("\nOriginal actions:", flush=True)
+                    print(original_action.cpu(), flush=True)
+
+                    print(
+                        f"\nModified actions "
+                        f"(dimension {hidden_action_dimension} set to 0):",
+                        flush=True,
+                    )
+                    print(modified_action.detach().cpu(), flush=True)
+
+                    print("\nFlattened joint action sent to critic:", flush=True)
+                    print(flattened_action.detach().cpu(), flush=True)
+
+                    hidden_values = modified_action[..., hidden_action_dimension]
+
+                    print(
+                        "\nAll hidden values equal zero:",
+                        bool(torch.all(hidden_values == 0.0).item()),
+                        flush=True,
+                    )
+
+                    print(
+                        "Original action tensor unchanged:",
+                        bool(torch.equal(action.detach(), original_action)),
+                        flush=True,
+                    )
+
+                    # Verify that every non-hidden dimension still matches.
+                    non_hidden_mask = torch.ones(
+                        action.shape[-1],
+                        dtype=torch.bool,
+                        device=action.device,
+                    )
+                    non_hidden_mask[hidden_action_dimension] = False
+
+                    print(
+                        "All non-hidden dimensions unchanged:",
+                        bool(
+                            torch.equal(
+                                modified_action[..., non_hidden_mask],
+                                original_action.to(action.device)[..., non_hidden_mask],
+                            )
+                        ),
+                        flush=True,
+                    )
+
+                    print("=========================================\n", flush=True)
+
+                return flattened_action
+
+
             modules.append(
                 TensorDictModule(
                     hide_action_dimension,
