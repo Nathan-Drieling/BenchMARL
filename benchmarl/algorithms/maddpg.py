@@ -253,7 +253,7 @@ class Maddpg(Algorithm):
             # [a1 a2 0 a4 a5 b1 b2 0 b4 b5 c1 c2 0 c4 c5]
             # ---------------------------------------------------------------------
     
-            hidden_action_dimension = 2
+            hidden_action_dimension = [2 , 3]  # The action dimension to hide (set to 0) for the critic input
             verification_printed = False
 
             def hide_action_dimension(action):
@@ -266,7 +266,7 @@ class Maddpg(Algorithm):
                 modified_action = action.clone().index_fill_(
                     dim=-1,
                     index=torch.tensor(
-                        [hidden_action_dimension],
+                        hidden_action_dimension,
                         device=action.device,
                         dtype=torch.long,
                     ),
