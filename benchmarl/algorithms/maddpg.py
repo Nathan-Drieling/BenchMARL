@@ -4,8 +4,6 @@
 #  LICENSE file in the root directory of this source tree.
 #
 
-import torch
- 
 from dataclasses import dataclass, MISSING
 from typing import Dict, Iterable, Tuple, Type
 
@@ -203,147 +201,10 @@ class Maddpg(Algorithm):
                 }
             )
 
-            print(
-                "\n[VERIFY] Building MADDPG centralized critic",
-                flush=True,
-            )
-
-            print(
-                f"[VERIFY] self.state_spec is None: {self.state_spec is None}",
-                flush=True,
-            )
-
-            print(
-                f"[VERIFY] Agent group: {group}",
-                flush=True,
-            )
-
-            print(
-                f"[VERIFY] Number of agents: {n_agents}",
-                flush=True,
-            )
-
         if self.state_spec is not None:
-            
-            print("\n[VERIFY] Using Global-State critic branch", flush=True)
-            
-            # ---------------------------------------------------------------------
-            # Original BenchMARL behavior:
-            # The centralized critic receives the complete joint action vector,
-            # created by flattening the actions from every agent into a single tensor.
-            #
-            # Example for Simple Spread with 3 agents and a 5-dimensional
-            # continuous action vector per agent:
-            #
-            # Agent 1: [a1 a2 a3 a4 a5]
-            # Agent 2: [b1 b2 b3 b4 b5]
-            # Agent 3: [c1 c2 c3 c4 c5]
-            #
-            # Original flattened critic input:
-            #
-            # [a1 a2 a3 a4 a5 b1 b2 b3 b4 b5 c1 c2 c3 c4 c5]
-            #
-            # Thesis modification:
-            # Before flattening, action dimension 2 is replaced with 0.0 for every
-            # agent. Only the centralized critic receives this modified action vector.
-            # The actors and environment still receive the original actions.
-            #
-            # Modified flattened critic input:
-            #
-            # [a1 a2 0 a4 a5 b1 b2 0 b4 b5 c1 c2 0 c4 c5]
-            # ---------------------------------------------------------------------
-    
-            hidden_action_dimension = [2 , 3]  # The action dimension to hide (set to 0) for the critic input
-            verification_printed = False
-
-            def hide_action_dimension(action):
-                nonlocal verification_printed
-
-                # Save an untouched copy so we can verify that the original
-                # action tensor is not modified by the critic transformation.
-                original_action = action.detach().clone()
-
-                modified_action = action.clone().index_fill_(
-                    dim=-1,
-                    index=torch.tensor(
-                        hidden_action_dimension,
-                        device=action.device,
-                        dtype=torch.long,
-                    ),
-                    value=0.0,
-                )
-
-                flattened_action = modified_action.reshape(
-                    *action.shape[:-2],
-                    -1,
-                )
-
-                if not verification_printed:
-                    verification_printed = True
-
-                    print("\n========== CODE MODIFICATION VERIFICATION ==========", flush=True)
-
-                    print(f"\nOriginal action shape: {tuple(action.shape)}", flush=True)
-                    print(f"Modified action shape: {tuple(modified_action.shape)}", flush=True)
-                    print(
-                        f"Flattened critic input shape: {tuple(flattened_action.shape)}",
-                        flush=True,
-                    )
-
-                    print("\nOriginal actions:", flush=True)
-                    print(original_action.cpu(), flush=True)
-
-                    print(
-                        f"\nModified actions "
-                        f"(dimension {hidden_action_dimension} set to 0):",
-                        flush=True,
-                    )
-                    print(modified_action.detach().cpu(), flush=True)
-
-                    print("\nFlattened joint action sent to critic:", flush=True)
-                    print(flattened_action.detach().cpu(), flush=True)
-
-                    hidden_values = modified_action[..., hidden_action_dimension]
-
-                    print(
-                        "\nAll hidden values equal zero:",
-                        bool(torch.all(hidden_values == 0.0).item()),
-                        flush=True,
-                    )
-
-                    print(
-                        "Original action tensor unchanged:",
-                        bool(torch.equal(action.detach(), original_action)),
-                        flush=True,
-                    )
-
-                    # Verify that every non-hidden dimension still matches.
-                    non_hidden_mask = torch.ones(
-                        action.shape[-1],
-                        dtype=torch.bool,
-                        device=action.device,
-                    )
-                    non_hidden_mask[hidden_action_dimension] = False
-
-                    print(
-                        "All non-hidden dimensions unchanged:",
-                        bool(
-                            torch.equal(
-                                modified_action[..., non_hidden_mask],
-                                original_action.to(action.device)[..., non_hidden_mask],
-                            )
-                        ),
-                        flush=True,
-                    )
-
-                    print("=========================================\n", flush=True)
-
-                return flattened_action
-
-
             modules.append(
                 TensorDictModule(
-                    hide_action_dimension,
+                    lambda action: action.reshape(*action.shape[:-2], -1),
                     in_keys=[(group, "action")],
                     out_keys=["global_action"],
                 )
@@ -359,9 +220,6 @@ class Maddpg(Algorithm):
             input_has_agent_dim = False
 
         else:
-            
-            print("\n[VERIFY] Using observation/action critic branch", flush=True)
-            
             critic_input_spec = Composite(
                 {
                     group: self.observation_spec[group]
