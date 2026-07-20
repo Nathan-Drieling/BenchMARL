@@ -203,6 +203,12 @@ class Maddpg(Algorithm):
 
         if self.state_spec is not None:
             modules.append(
+                self._get_action_modifier(
+                    group=group,
+                    hidden_action_dimensions=(0,),
+                )
+            )
+            modules.append(
                 TensorDictModule(
                     lambda action: action.reshape(*action.shape[:-2], -1),
                     in_keys=[(group, "action")],

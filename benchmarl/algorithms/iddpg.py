@@ -204,6 +204,12 @@ class Iddpg(Algorithm):
         )
 
         modules.append(
+            self._get_action_modifier(
+                group=group,
+                hidden_action_dimensions=(0,),
+            )
+        )
+        modules.append(
             self.critic_model_config.get_model(
                 input_spec=critic_input_spec,
                 output_spec=critic_output_spec,

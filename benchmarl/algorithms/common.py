@@ -6,8 +6,6 @@
 
 import pathlib
 
-import torch
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type
@@ -223,46 +221,14 @@ class Algorithm(ABC):
                 }
             )
         return self._policies_for_loss[group]
-    
-    def _get_global_action_modifier(
-        self,
-        group: str,
-        hidden_action_dimensions=(0,),
-    ) -> TensorDictModule:
-        hidden_action_dimensions = tuple(hidden_action_dimensions)
-
-        def modify_action(action):
-            
-            print("DEBUG: original action tensor:", action)
-            print("DEBUG: original action shape:", action.shape)
-            
-            modified_action = action.clone()
-            modified_action.index_fill_(
-                dim=-1,
-                index=torch.tensor(
-                    hidden_action_dimensions,
-                    dtype=torch.long,
-                    device=action.device,
-                ),
-                value=0.0,
-            )
-            
-            print("DEBUG: modified action tensor:", modified_action)
-            print("DEBUG: modified action shape:", modified_action.shape)
-            
-            return modified_action
-
-        return TensorDictModule(
-            modify_action,
-            in_keys=[(group, "action")],
-            out_keys=[(group, "action")],
-        )
 
     def get_policy_for_collection(self) -> TensorDictSequential:
         """
         Get the explorative policy for all groups together.
         This function calls the abstract :class:`~benchmarl.algorithms.Algorithm._get_policy_for_collection()` which needs to be implemented.
-        The function will cache the output at the first call and return the cached values in future results.
+        The function will cache the output at the first call and return the cached values in future calls.
+
+        Returns: TensorDictSequential representing all explorative policies
         """
         policies = []
         for group in self.group_map.keys():
@@ -270,27 +236,13 @@ class Algorithm(ABC):
                 policy_for_loss = self.get_policy_for_loss(group)
                 action_space = self.action_spec[group, "action"]
                 continuous = not isinstance(action_space, (Categorical, OneHot))
-
                 policy_for_collection = self._get_policy_for_collection(
                     policy_for_loss,
                     group,
                     continuous,
                 )
-
-                action_modifier = self._get_global_action_modifier(
-                    group=group,
-                    hidden_action_dimensions=(0,),
-                )
-
-                policy_for_collection = TensorDictSequential(
-                    policy_for_collection,
-                    action_modifier,
-                )
-
                 self._policies_for_collection.update({group: policy_for_collection})
-
             policies.append(self._policies_for_collection[group])
-
         return TensorDictSequential(*policies)
 
     def get_parameters(self, group: str) -> Dict[str, Iterable]:
@@ -365,36 +317,6 @@ class Algorithm(ABC):
         Returns: TensorDictModule representing the policy
         """
         raise NotImplementedError
-    
-    #ADDED CODE HERE
-
-    def _get_action_modifier(
-        self,
-        group: str,
-        hidden_action_dimensions=(0,),
-    ) -> TensorDictModule:
-        hidden_action_dimensions = tuple(hidden_action_dimensions)
-
-        def modify_action(action):
-            modified_action = action.clone()
-            modified_action.index_fill_(
-                dim=-1,
-                index=torch.tensor(
-                    hidden_action_dimensions,
-                    dtype=torch.long,
-                    device=action.device,
-                ),
-                value=0.0,
-            )
-            return modified_action
-
-        return TensorDictModule(
-            modify_action,
-            in_keys=[(group, "action")],
-            out_keys=[(group, "action")],
-        )
-        
-    #DONE ADDING CODE HERE
 
     @abstractmethod
     def _get_policy_for_collection(
