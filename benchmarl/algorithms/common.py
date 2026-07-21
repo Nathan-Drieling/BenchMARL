@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type
 
+import torch
 from tensordict import TensorDictBase
 from tensordict.nn import TensorDictModule, TensorDictSequential
 from torchrl.data import (
@@ -272,6 +273,43 @@ class Algorithm(ABC):
         """
 
         return env_fun
+
+    def _get_action_modifier(
+        self,
+        group: str,
+        hidden_action_dimensions: Tuple[int, ...] = (),
+    ) -> TensorDictModule:
+        """Return a module that zeroes out selected action dimensions.
+
+        Args:
+            group (str): The agent group whose actions should be modified.
+            hidden_action_dimensions (tuple[int, ...]): The dimensions of the
+                action tensor to zero out before the critic sees them.
+
+        Returns:
+            TensorDictModule: A module that masks the requested action dimensions.
+        """
+
+        def _mask_action(action: torch.Tensor) -> torch.Tensor:
+            if not hidden_action_dimensions:
+                return action
+
+            masked = action.clone()
+            for dim in hidden_action_dimensions:
+                if dim < 0:
+                    dim += masked.shape[-1]
+                if dim < 0 or dim >= masked.shape[-1]:
+                    raise IndexError(
+                        f"Action dimension {dim} is out of bounds for action shape {tuple(masked.shape)}"
+                    )
+                masked[..., dim] = 0.0
+            return masked
+
+        return TensorDictModule(
+            _mask_action,
+            in_keys=[(group, "action")],
+            out_keys=[(group, "action")],
+        )
 
     ###############################
     # Abstract methods to implement

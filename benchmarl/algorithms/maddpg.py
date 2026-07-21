@@ -186,6 +186,12 @@ class Maddpg(Algorithm):
     def get_value_module(self, group: str) -> TensorDictModule:
         n_agents = len(self.group_map[group])
         modules = []
+        modules.append(
+            self._get_action_modifier(
+                group=group,
+                hidden_action_dimensions=(0,),
+            )
+        )
 
         if self.share_param_critic:
             critic_output_spec = Composite(
@@ -202,12 +208,6 @@ class Maddpg(Algorithm):
             )
 
         if self.state_spec is not None:
-            modules.append(
-                self._get_action_modifier(
-                    group=group,
-                    hidden_action_dimensions=(0,),
-                )
-            )
             modules.append(
                 TensorDictModule(
                     lambda action: action.reshape(*action.shape[:-2], -1),
