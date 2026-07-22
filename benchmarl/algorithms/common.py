@@ -4,6 +4,7 @@
 #  LICENSE file in the root directory of this source tree.
 #
 
+import os
 import pathlib
 
 from abc import ABC, abstractmethod
@@ -274,43 +275,6 @@ class Algorithm(ABC):
 
         return env_fun
 
-    def _get_action_modifier(
-        self,
-        group: str,
-        hidden_action_dimensions: Tuple[int, ...] = (),
-    ) -> TensorDictModule:
-        """Return a module that zeroes out selected action dimensions.
-
-        Args:
-            group (str): The agent group whose actions should be modified.
-            hidden_action_dimensions (tuple[int, ...]): The dimensions of the
-                action tensor to zero out before the critic sees them.
-
-        Returns:
-            TensorDictModule: A module that masks the requested action dimensions.
-        """
-
-        def _mask_action(action: torch.Tensor) -> torch.Tensor:
-            if not hidden_action_dimensions:
-                return action
-
-            masked = action.clone()
-            for dim in hidden_action_dimensions:
-                if dim < 0:
-                    dim += masked.shape[-1]
-                if dim < 0 or dim >= masked.shape[-1]:
-                    raise IndexError(
-                        f"Action dimension {dim} is out of bounds for action shape {tuple(masked.shape)}"
-                    )
-                masked[..., dim] = 0.0
-            return masked
-
-        return TensorDictModule(
-            _mask_action,
-            in_keys=[(group, "action")],
-            out_keys=[(group, "action")],
-        )
-
     ###############################
     # Abstract methods to implement
     ###############################
@@ -400,6 +364,194 @@ class Algorithm(ABC):
         Returns: the processed loss_vals
         """
         return loss_vals
+
+    def process_batch_for_replay_buffer(
+        self, group: str, batch: TensorDictBase
+    ) -> TensorDictBase:
+        """Optional hook to edit actions before writing transitions to replay buffer."""
+        return self._maybe_mask_actions_for_q_input(
+            group=group,
+            td=batch,
+            stage="write",
+        )
+
+    def process_replay_buffer_sample(
+        self, group: str, subdata: TensorDictBase
+    ) -> TensorDictBase:
+        """Optional hook to edit actions right after replay sampling, before critic/loss."""
+        return self._maybe_mask_actions_for_q_input(
+            group=group,
+            td=subdata,
+            stage="read",
+        )
+
+    def _maybe_mask_actions_for_q_input(
+        self, group: str, td: TensorDictBase, stage: str
+    ) -> TensorDictBase:
+        """Mask selected action dimensions for Q-input visibility experiments.
+
+        Env vars:
+            BENCHMARL_Q_MASK_ACTION_DIMS: comma-separated dims, e.g. "0,2"
+            BENCHMARL_Q_MASK_VALUE: mask value (default: 0.0)
+            BENCHMARL_Q_MASK_STAGE: "write", "read", or "both" (default: "read")
+            BENCHMARL_Q_MASK_GROUP: optional group filter
+            BENCHMARL_Q_MASK_CRITIC_IDX: optional observer/critic index for observer-aware tensors
+            BENCHMARL_Q_MASK_PRINT_EVERY: print every N applications (default: 1)
+            BENCHMARL_Q_MASK_PREVIEW_BATCH_IDX: batch row printed in full (default: 0)
+            BENCHMARL_Q_MASK_PRINT_DECIMALS: decimals for printed floats (default: 4)
+        """
+        if stage not in ("write", "read"):
+            return td
+
+        mask_stage = os.getenv("BENCHMARL_Q_MASK_STAGE", "read").strip().lower()
+        if mask_stage not in ("write", "read", "both"):
+            return td
+        if mask_stage != "both" and mask_stage != stage:
+            return td
+
+        target_group = os.getenv("BENCHMARL_Q_MASK_GROUP")
+        if target_group is not None and target_group != group:
+            return td
+
+        dims_str = os.getenv("BENCHMARL_Q_MASK_ACTION_DIMS")
+        if dims_str is None or not dims_str.strip():
+            return td
+
+        try:
+            mask_dims = [int(piece.strip()) for piece in dims_str.split(",") if piece.strip()]
+        except ValueError:
+            print(
+                f"[Q-mask] Skipped ({stage}) for group={group}. Could not parse BENCHMARL_Q_MASK_ACTION_DIMS='{dims_str}'."
+            )
+            return td
+
+        if not mask_dims:
+            return td
+
+        action_key = (group, "action")
+        if action_key not in td.keys(True, True):
+            print(
+                f"[Q-mask] Skipped ({stage}) for group={group}. Action key {action_key} is missing."
+            )
+            return td
+
+        action = td.get(action_key)
+        if action.ndim < 3:
+            print(
+                f"[Q-mask] Skipped ({stage}) for group={group}. Expected action ndim>=3, got {action.ndim}."
+            )
+            return td
+
+        action_dim_size = action.shape[-1]
+        invalid_dims = [d for d in mask_dims if d < 0 or d >= action_dim_size]
+        if invalid_dims:
+            print(
+                f"[Q-mask] Skipped ({stage}) for group={group}. Invalid dims {invalid_dims}. Valid range is [0, {action_dim_size - 1}]."
+            )
+            return td
+
+        mask_value = float(os.getenv("BENCHMARL_Q_MASK_VALUE", "0.0"))
+        critic_idx_str = os.getenv("BENCHMARL_Q_MASK_CRITIC_IDX")
+        critic_idx = int(critic_idx_str) if critic_idx_str is not None else None
+        print_every = int(os.getenv("BENCHMARL_Q_MASK_PRINT_EVERY", "1"))
+        preview_batch_idx = int(os.getenv("BENCHMARL_Q_MASK_PREVIEW_BATCH_IDX", "0"))
+        print_decimals = int(os.getenv("BENCHMARL_Q_MASK_PRINT_DECIMALS", "4"))
+
+        original_action = action.clone()
+        mask_tensor = torch.as_tensor(mask_value, dtype=action.dtype, device=action.device)
+
+        # Shared joint-action layout: [..., n_agents, action_dim]
+        if action.ndim == 3:
+            action[..., mask_dims] = mask_tensor
+            mode = "shared_joint_action"
+
+        # Observer-aware layout: [..., n_observers, n_agents, action_dim]
+        elif action.ndim >= 4:
+            if critic_idx is None:
+                action[..., :, :, mask_dims] = mask_tensor
+                mode = "observer_aware_all_critics"
+            else:
+                if critic_idx < 0 or critic_idx >= action.shape[-3]:
+                    print(
+                        f"[Q-mask] Skipped ({stage}) for group={group}. critic_idx={critic_idx} out of range [0, {action.shape[-3] - 1}]."
+                    )
+                    return td
+                action[..., critic_idx, :, mask_dims] = mask_tensor
+                mode = f"observer_aware_critic_{critic_idx}"
+        else:
+            return td
+
+        td.set(action_key, action)
+
+        if not hasattr(self, "_q_mask_print_counters"):
+            self._q_mask_print_counters = {}
+        counter_key = (stage, group)
+        group_count = self._q_mask_print_counters.get(counter_key, 0) + 1
+        self._q_mask_print_counters[counter_key] = group_count
+
+        if print_every > 0 and group_count % print_every == 0:
+            if action.shape[0] == 0:
+                batch_idx = 0
+            else:
+                batch_idx = max(0, min(preview_batch_idx, action.shape[0] - 1))
+
+            before_tensor = original_action[batch_idx].detach().cpu().tolist()
+            after_tensor = action[batch_idx].detach().cpu().tolist()
+
+            def _round_nested(values):
+                if isinstance(values, float):
+                    return round(values, print_decimals)
+                if isinstance(values, list):
+                    return [_round_nested(item) for item in values]
+                return values
+
+            before_tensor = _round_nested(before_tensor)
+            after_tensor = _round_nested(after_tensor)
+
+            def _print_action_tensor_lines(label: str, tensor_view):
+                print(label)
+                # Shared layout at one batch row: [n_agents, action_dim]
+                if (
+                    isinstance(tensor_view, list)
+                    and tensor_view
+                    and isinstance(tensor_view[0], list)
+                    and (not tensor_view[0] or not isinstance(tensor_view[0][0], list))
+                ):
+                    for agent_idx, agent_action in enumerate(tensor_view):
+                        print(f"  agent[{agent_idx}] = {agent_action}")
+                    return
+
+                # Observer-aware layout at one batch row: [n_critics, n_agents, action_dim]
+                if (
+                    isinstance(tensor_view, list)
+                    and tensor_view
+                    and isinstance(tensor_view[0], list)
+                    and tensor_view[0]
+                    and isinstance(tensor_view[0][0], list)
+                ):
+                    for critic_idx, critic_view in enumerate(tensor_view):
+                        print(f"  critic[{critic_idx}] view:")
+                        for agent_idx, agent_action in enumerate(critic_view):
+                            print(f"    agent[{agent_idx}] = {agent_action}")
+                    return
+
+                # Fallback for unexpected layout
+                print(f"  {tensor_view}")
+
+            print("\n[Q-mask] ==============================")
+            print(f"[Q-mask] Stage : {stage}")
+            print(f"[Q-mask] Group : {group}")
+            print(f"[Q-mask] Mode  : {mode}")
+            print(f"[Q-mask] Shape : {tuple(action.shape)}")
+            print(f"[Q-mask] Dims  : {mask_dims}")
+            print(f"[Q-mask] Value : {round(mask_value, print_decimals)}")
+            print(f"[Q-mask] Prec. : {print_decimals} decimals")
+            print(f"[Q-mask] Batch : {batch_idx}")
+            _print_action_tensor_lines("[Q-mask] -- a_1..a_N before --", before_tensor)
+            _print_action_tensor_lines("[Q-mask] -- a_1..a_N after  --", after_tensor)
+            print("[Q-mask] ==============================\n")
+
+        return td
 
 
 @dataclass

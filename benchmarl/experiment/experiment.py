@@ -735,6 +735,9 @@ class Experiment(CallbackNotifier):
                     self.config.train_device
                 )
                 group_batch = self.algorithm.process_batch(group, group_batch)
+                group_batch = self.algorithm.process_batch_for_replay_buffer(
+                    group, group_batch
+                )
                 if not self.algorithm.has_rnn:
                     group_batch = group_batch.reshape(-1)
 
@@ -835,6 +838,7 @@ class Experiment(CallbackNotifier):
 
     def _optimizer_loop(self, group: str) -> TensorDictBase:
         subdata = self.replay_buffers[group].sample().to(self.config.train_device)
+        subdata = self.algorithm.process_replay_buffer_sample(group, subdata)
         loss_vals = self.losses[group](subdata)
         training_td = loss_vals.detach()
         loss_vals = self.algorithm.process_loss_vals(group, loss_vals)
@@ -1066,4 +1070,5 @@ class Experiment(CallbackNotifier):
             critic_model_config=critic_model_config,
         )
         print(f"\nReloaded experiment {experiment.name} from {restore_file}.")
+        experiment._load_experiment()
         return experiment
